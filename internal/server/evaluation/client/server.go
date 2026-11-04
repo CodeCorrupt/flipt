@@ -15,7 +15,6 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
-	"google.golang.org/grpc/peer"
 )
 
 // getCurrentEnvironment retrieves the environment by key. See evaluation.ResolveEnvironment for the fallback rules.
@@ -202,19 +201,5 @@ func (s *Server) SkipsAuthentication(ctx context.Context) bool {
 		return false
 	}
 
-	md, ok := metadata.FromIncomingContext(ctx)
-	if !ok {
-		return false
-	}
-
-	if vals := md.Get(common.HeaderFliptOFREPStream); len(vals) == 0 || vals[0] != "true" {
-		return false
-	}
-
-	p, ok := peer.FromContext(ctx)
-	if !ok || p.Addr.Network() != "inproc" {
-		return false
-	}
-
-	return true
+	return common.IsOFREPStreamRequest(ctx)
 }

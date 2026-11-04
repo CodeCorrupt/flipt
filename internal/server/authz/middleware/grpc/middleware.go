@@ -9,10 +9,12 @@ import (
 	"go.flipt.io/flipt/internal/containers"
 	authmiddlewaregrpc "go.flipt.io/flipt/internal/server/authn/middleware/grpc"
 	"go.flipt.io/flipt/internal/server/authz"
+	servercommon "go.flipt.io/flipt/internal/server/common"
 	"go.flipt.io/flipt/rpc/flipt"
 	authrpc "go.flipt.io/flipt/rpc/flipt/auth"
 	"go.flipt.io/flipt/rpc/flipt/ofrep"
 	"go.flipt.io/flipt/rpc/v2/environments"
+	rpcevaluationv2 "go.flipt.io/flipt/rpc/v2/evaluation"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 )
@@ -87,12 +89,24 @@ func WithServerSkipsAuthorization(server any) containers.Option[InterceptorOptio
 var errUnauthorized = errors.ErrUnauthorizedf("permission denied")
 
 // authorizationRequest derives the action from the RPC method because create and
-// update RPCs share the same protobuf request messages.
-func authorizationRequest(fullMethod string, request flipt.Request) flipt.Request {
+// update RPCs share the same protobuf request messages, and because snapshot
+// RPCs return a namespace's rules or change notifications rather than
+// evaluation results.
+func authorizationRequest(ctx context.Context, fullMethod string, request flipt.Request) flipt.Request {
 	switch fullMethod {
 	case environments.EnvironmentsService_CreateNamespace_FullMethodName,
 		environments.EnvironmentsService_CreateResource_FullMethodName:
 		request.Action = flipt.ActionCreate
+	case rpcevaluationv2.ClientEvaluationService_EvaluationSnapshotNamespace_FullMethodName:
+		request.Action = flipt.ActionSnapshot
+	case rpcevaluationv2.ClientEvaluationService_EvaluationSnapshotNamespaceStream_FullMethodName:
+		// The OFREP event stream alias only sends change notifications, never
+		// the snapshot itself.
+		if servercommon.IsOFREPStreamRequest(ctx) {
+			request.Action = flipt.ActionWatch
+		} else {
+			request.Action = flipt.ActionSnapshot
+		}
 	}
 
 	return request
@@ -222,7 +236,7 @@ func authorize(ctx context.Context, logger *zap.Logger, policyVerifier authz.Ver
 	}
 
 	for _, request := range requests {
-		request = authorizationRequest(fullMethod, request)
+		request = authorizationRequest(ctx, fullMethod, request)
 
 		// Convert the request and authentication to plain Go values once so
 		// the policy engine can consume them without converting structs on
