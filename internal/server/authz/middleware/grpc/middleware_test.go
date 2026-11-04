@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -24,6 +25,7 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -147,6 +149,89 @@ func TestAuthorizationActionForCreateAndUpdateMethods(t *testing.T) {
 
 			require.NoError(t, err)
 			assert.Equal(t, authz.RequestInput(tt.want), policyVerifier.input["request"])
+		})
+	}
+}
+
+type inprocAddr struct{}
+
+func (inprocAddr) Network() string { return "inproc" }
+func (inprocAddr) String() string  { return "0" }
+
+func TestAuthorizationActionForSnapshotMethods(t *testing.T) {
+	ofrepStreamMarker := func(ctx context.Context) context.Context {
+		return metadata.NewIncomingContext(ctx, metadata.Pairs(servercommon.HeaderFliptOFREPStream, "true"))
+	}
+	inprocPeer := func(ctx context.Context) context.Context {
+		return peer.NewContext(ctx, &peer.Peer{Addr: inprocAddr{}})
+	}
+	tcpPeer := func(ctx context.Context) context.Context {
+		return peer.NewContext(ctx, &peer.Peer{Addr: &net.TCPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 9000}})
+	}
+
+	tests := []struct {
+		name       string
+		fullMethod string
+		ctx        func(context.Context) context.Context
+		req        flipt.Requester
+		want       flipt.Action
+	}{
+		{
+			name:       "snapshot",
+			fullMethod: rpcevaluationv2.ClientEvaluationService_EvaluationSnapshotNamespace_FullMethodName,
+			ctx:        func(ctx context.Context) context.Context { return ctx },
+			req:        &rpcevaluationv2.EvaluationNamespaceSnapshotRequest{EnvironmentKey: "production", Key: "team-a"},
+			want:       flipt.ActionSnapshot,
+		},
+		{
+			name:       "snapshot stream",
+			fullMethod: rpcevaluationv2.ClientEvaluationService_EvaluationSnapshotNamespaceStream_FullMethodName,
+			ctx:        func(ctx context.Context) context.Context { return ctx },
+			req:        &rpcevaluationv2.EvaluationNamespaceSnapshotStreamRequest{EnvironmentKey: "production", Key: "team-a"},
+			want:       flipt.ActionSnapshot,
+		},
+		{
+			name:       "ofrep event stream from the gateway",
+			fullMethod: rpcevaluationv2.ClientEvaluationService_EvaluationSnapshotNamespaceStream_FullMethodName,
+			ctx:        func(ctx context.Context) context.Context { return inprocPeer(ofrepStreamMarker(ctx)) },
+			req:        &rpcevaluationv2.EvaluationNamespaceSnapshotStreamRequest{EnvironmentKey: "production", Key: "team-a"},
+			want:       flipt.ActionWatch,
+		},
+		{
+			name:       "ofrep event stream marker from a remote peer",
+			fullMethod: rpcevaluationv2.ClientEvaluationService_EvaluationSnapshotNamespaceStream_FullMethodName,
+			ctx:        func(ctx context.Context) context.Context { return tcpPeer(ofrepStreamMarker(ctx)) },
+			req:        &rpcevaluationv2.EvaluationNamespaceSnapshotStreamRequest{EnvironmentKey: "production", Key: "team-a"},
+			want:       flipt.ActionSnapshot,
+		},
+		{
+			name:       "stream from the gateway without the ofrep marker",
+			fullMethod: rpcevaluationv2.ClientEvaluationService_EvaluationSnapshotNamespaceStream_FullMethodName,
+			ctx:        inprocPeer,
+			req:        &rpcevaluationv2.EvaluationNamespaceSnapshotStreamRequest{EnvironmentKey: "production", Key: "team-a"},
+			want:       flipt.ActionSnapshot,
+		},
+		{
+			name:       "boolean evaluation",
+			fullMethod: rpcevaluation.EvaluationService_Boolean_FullMethodName,
+			ctx:        func(ctx context.Context) context.Context { return ctx },
+			req:        &rpcevaluation.EvaluationRequest{EnvironmentKey: "production", NamespaceKey: "team-a"},
+			want:       flipt.ActionEvaluate,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			policyVerifier := &mockPolicyVerifier{isAllowed: true}
+			ctx := tt.ctx(authmiddlewaregrpc.ContextWithAuthentication(t.Context(), adminAuth))
+			info := &grpc.UnaryServerInfo{Server: &mockServer{}, FullMethod: tt.fullMethod}
+
+			_, err := AuthorizationRequiredInterceptor(zap.NewNop(), policyVerifier)(ctx, tt.req, info, func(context.Context, any) (any, error) {
+				return nil, nil
+			})
+
+			require.NoError(t, err)
+			assert.Equal(t, string(tt.want), policyVerifier.input["request"].(map[string]any)["action"])
 		})
 	}
 }
@@ -643,7 +728,7 @@ func TestAuthorizationRequiredStreamInterceptor(t *testing.T) {
 			"scope":       "namespace",
 			"environment": "production",
 			"namespace":   "team-a",
-			"action":      "evaluate",
+			"action":      "snapshot",
 		}, verifier.input["request"])
 	})
 

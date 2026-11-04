@@ -34,6 +34,14 @@ const (
 	// ActionEvaluate is the action for evaluating flags. It is separate from
 	// read so policies can grant evaluation without granting management reads.
 	ActionEvaluate Action = "evaluate"
+	// ActionSnapshot is the action for downloading a namespace's evaluation
+	// rules, as client-side SDKs do. It is separate from evaluate so policies
+	// can grant evaluation results without granting the rules behind them.
+	ActionSnapshot Action = "snapshot"
+	// ActionWatch is the action for subscribing to change notifications for a
+	// namespace's flags, as the OFREP event stream does. The notifications
+	// carry neither evaluation rules nor results.
+	ActionWatch Action = "watch"
 )
 
 // Request represents an authorization request
