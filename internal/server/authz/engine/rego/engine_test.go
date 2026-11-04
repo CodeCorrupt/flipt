@@ -180,6 +180,73 @@ func TestEngine_IsAllowed(t *testing.T) {
 	}
 }
 
+const policyEvaluationContext = `package flipt.authz.v2
+
+import rego.v1
+
+default allow := false
+
+allow if {
+	input.request.action == "evaluate"
+	input.request.evaluation.context.instance == input.authentication.metadata["io.flipt.auth.instance"]
+}
+`
+
+func TestEngine_IsAllowedEvaluationContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+
+	engine, err := newEngine(ctx, zaptest.NewLogger(t),
+		withPolicySource(policySource(policyEvaluationContext)),
+		withDataSource(dataSource(`{}`), time.Hour))
+	require.NoError(t, err)
+
+	auth := &authrpc.Authentication{
+		Method:   authrpc.Method_METHOD_JWT,
+		Metadata: map[string]string{"io.flipt.auth.instance": "acme"},
+	}
+	request := func(action flipt.Action) flipt.Request {
+		return flipt.NewRequest(flipt.ScopeNamespace, action,
+			flipt.WithEnvironment("default"),
+			flipt.WithNamespace("default"))
+	}
+
+	tests := []struct {
+		name     string
+		input    map[string]any
+		expected bool
+	}{
+		{
+			name:     "matching context",
+			input:    authz.InputWithEvaluation(request(flipt.ActionEvaluate), auth, authz.EvaluationInput("flag", "entity", map[string]string{"instance": "acme"})),
+			expected: true,
+		},
+		{
+			name:     "other instance in context",
+			input:    authz.InputWithEvaluation(request(flipt.ActionEvaluate), auth, authz.EvaluationInput("flag", "entity", map[string]string{"instance": "globex"})),
+			expected: false,
+		},
+		{
+			name:     "no context",
+			input:    authz.InputWithEvaluation(request(flipt.ActionEvaluate), auth, authz.EvaluationInput("flag", "entity", nil)),
+			expected: false,
+		},
+		{
+			name:     "read",
+			input:    authz.Input(request(flipt.ActionRead), auth),
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			allowed, err := engine.IsAllowed(ctx, tt.input)
+			require.NoError(t, err)
+			assert.Equal(t, tt.expected, allowed)
+		})
+	}
+}
+
 func TestEngine_ViewableEnvironments(t *testing.T) {
 	policy, err := os.ReadFile("../testdata/rbac_v2.rego")
 	require.NoError(t, err)

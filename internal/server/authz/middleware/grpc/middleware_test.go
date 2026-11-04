@@ -454,6 +454,9 @@ func TestAuthorizationRequiredInterceptor_EvaluationRequests(t *testing.T) {
 			req: &rpcevaluation.EvaluationRequest{
 				EnvironmentKey: "production",
 				NamespaceKey:   "team-a",
+				FlagKey:        "flag",
+				EntityId:       "entity",
+				Context:        map[string]string{"instance": "acme"},
 			},
 			want: []map[string]any{
 				{
@@ -461,6 +464,11 @@ func TestAuthorizationRequiredInterceptor_EvaluationRequests(t *testing.T) {
 					"environment": "production",
 					"namespace":   "team-a",
 					"action":      "evaluate",
+					"evaluation": map[string]any{
+						"flag_key":  "flag",
+						"entity_id": "entity",
+						"context":   map[string]string{"instance": "acme"},
+					},
 				},
 			},
 		},
@@ -469,8 +477,8 @@ func TestAuthorizationRequiredInterceptor_EvaluationRequests(t *testing.T) {
 			ctx:  func(ctx context.Context) context.Context { return ctx },
 			req: &rpcevaluation.BatchEvaluationRequest{
 				Requests: []*rpcevaluation.EvaluationRequest{
-					{EnvironmentKey: "production", NamespaceKey: "team-a"},
-					{EnvironmentKey: "production", NamespaceKey: "team-b"},
+					{EnvironmentKey: "production", NamespaceKey: "team-a", FlagKey: "flag-a", EntityId: "entity-a", Context: map[string]string{"instance": "acme"}},
+					{EnvironmentKey: "production", NamespaceKey: "team-b", FlagKey: "flag-b", EntityId: "entity-b", Context: map[string]string{"instance": "globex"}},
 				},
 			},
 			want: []map[string]any{
@@ -479,12 +487,22 @@ func TestAuthorizationRequiredInterceptor_EvaluationRequests(t *testing.T) {
 					"environment": "production",
 					"namespace":   "team-a",
 					"action":      "evaluate",
+					"evaluation": map[string]any{
+						"flag_key":  "flag-a",
+						"entity_id": "entity-a",
+						"context":   map[string]string{"instance": "acme"},
+					},
 				},
 				{
 					"scope":       "namespace",
 					"environment": "production",
 					"namespace":   "team-b",
 					"action":      "evaluate",
+					"evaluation": map[string]any{
+						"flag_key":  "flag-b",
+						"entity_id": "entity-b",
+						"context":   map[string]string{"instance": "globex"},
+					},
 				},
 			},
 		},
@@ -526,26 +544,36 @@ func TestAuthorizationRequiredInterceptor_EvaluationRequests(t *testing.T) {
 				ctx = cctx.WithFliptEnvironment(ctx, "production")
 				return cctx.WithFliptNamespace(ctx, "team-a")
 			},
-			req: &ofrep.EvaluateFlagRequest{Key: "flag"},
+			req: &ofrep.EvaluateFlagRequest{Key: "flag", Context: map[string]string{"targetingKey": "entity", "instance": "acme"}},
 			want: []map[string]any{
 				{
 					"scope":       "namespace",
 					"environment": "production",
 					"namespace":   "team-a",
 					"action":      "evaluate",
+					"evaluation": map[string]any{
+						"flag_key":  "flag",
+						"entity_id": "",
+						"context":   map[string]string{"targetingKey": "entity", "instance": "acme"},
+					},
 				},
 			},
 		},
 		{
 			name: "ofrep bulk request defaults",
 			ctx:  func(ctx context.Context) context.Context { return ctx },
-			req:  &ofrep.EvaluateBulkRequest{},
+			req:  &ofrep.EvaluateBulkRequest{Context: map[string]string{"instance": "acme"}},
 			want: []map[string]any{
 				{
 					"scope":       "namespace",
 					"environment": "default",
 					"namespace":   "default",
 					"action":      "evaluate",
+					"evaluation": map[string]any{
+						"flag_key":  "",
+						"entity_id": "",
+						"context":   map[string]string{"instance": "acme"},
+					},
 				},
 			},
 		},
@@ -572,6 +600,47 @@ func TestAuthorizationRequiredInterceptor_EvaluationRequests(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestAuthorizationRequiredInterceptor_DeniesBatchOnAnyEvaluation(t *testing.T) {
+	// only the second item names another instance, so the whole batch must be denied
+	verifier := &contextVerifier{allowedInstance: "acme"}
+	ctx := authmiddlewaregrpc.ContextWithAuthentication(t.Context(), adminAuth)
+	info := &grpc.UnaryServerInfo{Server: &mockServer{}, FullMethod: rpcevaluation.EvaluationService_Batch_FullMethodName}
+	req := &rpcevaluation.BatchEvaluationRequest{
+		Requests: []*rpcevaluation.EvaluationRequest{
+			{EnvironmentKey: "production", NamespaceKey: "default", FlagKey: "flag", Context: map[string]string{"instance": "acme"}},
+			{EnvironmentKey: "production", NamespaceKey: "default", FlagKey: "flag", Context: map[string]string{"instance": "globex"}},
+		},
+	}
+
+	called := false
+	_, err := AuthorizationRequiredInterceptor(zap.NewNop(), verifier)(ctx, req, info, func(context.Context, any) (any, error) {
+		called = true
+		return nil, nil
+	})
+
+	require.Error(t, err)
+	assert.False(t, called)
+	assert.Equal(t, 2, verifier.calls)
+}
+
+// contextVerifier allows evaluations whose context names allowedInstance.
+type contextVerifier struct {
+	mockPolicyVerifier
+	allowedInstance string
+	calls           int
+}
+
+func (v *contextVerifier) IsAllowed(_ context.Context, input map[string]any) (bool, error) {
+	v.calls++
+	evaluation, ok := input["request"].(map[string]any)["evaluation"].(map[string]any)
+	if !ok {
+		return false, nil
+	}
+
+	evaluationContext, _ := evaluation["context"].(map[string]string)
+	return evaluationContext["instance"] == v.allowedInstance, nil
 }
 
 type recordingVerifier struct {
