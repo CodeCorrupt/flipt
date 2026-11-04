@@ -44,6 +44,39 @@ func TestInput(t *testing.T) {
 	}, input)
 }
 
+func TestInputWithEvaluation(t *testing.T) {
+	auth := &authrpc.Authentication{
+		Id:     "some-id",
+		Method: authrpc.Method_METHOD_JWT,
+	}
+
+	input := InputWithEvaluation(flipt.NewRequest(flipt.ScopeNamespace, flipt.ActionEvaluate,
+		flipt.WithEnvironment("production"),
+		flipt.WithNamespace("default")), auth,
+		EvaluationInput("flag", "entity", map[string]string{"instance": "acme"}))
+
+	assert.Equal(t, map[string]any{
+		"request": map[string]any{
+			"scope":       "namespace",
+			"environment": "production",
+			"namespace":   "default",
+			"action":      "evaluate",
+			"evaluation": map[string]any{
+				"flag_key":  "flag",
+				"entity_id": "entity",
+				"context": map[string]string{
+					"instance": "acme",
+				},
+			},
+		},
+		"authentication": map[string]any{
+			"id":       "some-id",
+			"method":   5,
+			"metadata": map[string]string(nil),
+		},
+	}, input)
+}
+
 func TestRequestInput_OmitsUnsetScope(t *testing.T) {
 	input := RequestInput(flipt.NewRequest(flipt.ScopeEnvironment, flipt.ActionRead,
 		flipt.WithNoEnvironment(),
