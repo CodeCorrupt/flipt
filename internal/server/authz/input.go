@@ -19,6 +19,29 @@ func Input(request flipt.Request, auth *authrpc.Authentication) map[string]any {
 	}
 }
 
+// InputWithEvaluation builds the policy evaluation input for a flag evaluation
+// request. It adds evaluation, as built by EvaluationInput, to the request
+// input under the "evaluation" key.
+func InputWithEvaluation(request flipt.Request, auth *authrpc.Authentication, evaluation map[string]any) map[string]any {
+	requestInput := RequestInput(request)
+	requestInput["evaluation"] = evaluation
+
+	return map[string]any{
+		"request":        requestInput,
+		"authentication": AuthenticationInput(auth),
+	}
+}
+
+// EvaluationInput converts what a flag evaluation request asks Flipt to
+// evaluate to plain Go values.
+func EvaluationInput(flagKey, entityID string, evaluationContext map[string]string) map[string]any {
+	return map[string]any{
+		"flag_key":  flagKey,
+		"entity_id": entityID,
+		"context":   evaluationContext,
+	}
+}
+
 // RequestInput converts a request to plain Go values. The keys match the
 // JSON field names of the request: unset environment and namespace are
 // omitted.

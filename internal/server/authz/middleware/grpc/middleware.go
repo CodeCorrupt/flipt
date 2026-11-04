@@ -12,6 +12,7 @@ import (
 	servercommon "go.flipt.io/flipt/internal/server/common"
 	"go.flipt.io/flipt/rpc/flipt"
 	authrpc "go.flipt.io/flipt/rpc/flipt/auth"
+	rpcevaluation "go.flipt.io/flipt/rpc/flipt/evaluation"
 	"go.flipt.io/flipt/rpc/flipt/ofrep"
 	"go.flipt.io/flipt/rpc/v2/environments"
 	rpcevaluationv2 "go.flipt.io/flipt/rpc/v2/evaluation"
@@ -212,6 +213,36 @@ func requestsFor(ctx context.Context, req any) ([]flipt.Request, bool) {
 	return nil, false
 }
 
+// evaluationsFor describes what a flag evaluation request asks Flipt to
+// evaluate, with one entry for each authorization request from requestsFor. It
+// returns nil for requests that are not flag evaluations.
+func evaluationsFor(req any) []map[string]any {
+	switch r := req.(type) {
+	case *rpcevaluation.EvaluationRequest:
+		return []map[string]any{
+			authz.EvaluationInput(r.GetFlagKey(), r.GetEntityId(), r.GetContext()),
+		}
+	case *rpcevaluation.BatchEvaluationRequest:
+		evaluations := make([]map[string]any, 0, len(r.GetRequests()))
+		for _, item := range r.GetRequests() {
+			evaluations = append(evaluations,
+				authz.EvaluationInput(item.GetFlagKey(), item.GetEntityId(), item.GetContext()))
+		}
+
+		return evaluations
+	case *ofrep.EvaluateFlagRequest:
+		return []map[string]any{
+			authz.EvaluationInput(r.GetKey(), "", r.GetContext()),
+		}
+	case *ofrep.EvaluateBulkRequest:
+		return []map[string]any{
+			authz.EvaluationInput("", "", r.GetContext()),
+		}
+	}
+
+	return nil
+}
+
 func authorize(ctx context.Context, logger *zap.Logger, policyVerifier authz.Verifier, fullMethod string, req any) (context.Context, error) {
 	ctx = authz.ContextWithAuthorizationRequired(ctx)
 
@@ -235,13 +266,20 @@ func authorize(ctx context.Context, logger *zap.Logger, policyVerifier authz.Ver
 		return ctx, errUnauthorized
 	}
 
-	for _, request := range requests {
+	evaluations := evaluationsFor(req)
+
+	for i, request := range requests {
 		request = authorizationRequest(ctx, fullMethod, request)
 
 		// Convert the request and authentication to plain Go values once so
 		// the policy engine can consume them without converting structs on
 		// every evaluation.
-		input := authz.Input(request, auth)
+		var input map[string]any
+		if evaluations != nil {
+			input = authz.InputWithEvaluation(request, auth, evaluations[i])
+		} else {
+			input = authz.Input(request, auth)
+		}
 
 		allowed, err := policyVerifier.IsAllowed(ctx, input)
 		if err != nil {
