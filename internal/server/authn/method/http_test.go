@@ -4,8 +4,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.flipt.io/flipt/internal/config"
+	"go.flipt.io/flipt/rpc/flipt/auth"
 )
 
 func TestForwardCookies(t *testing.T) {
@@ -17,6 +21,19 @@ func TestForwardCookies(t *testing.T) {
 
 	assert.Equal(t, []string{"state-value"}, md.Get(stateCookieKey))
 	assert.Equal(t, []string{"token-value"}, md.Get(tokenCookieKey))
+}
+
+func TestForwardResponseOptionHostOnlyCookie(t *testing.T) {
+	m := NewHTTPMiddleware(config.AuthenticationSessionConfig{TokenLifetime: time.Hour})
+	w := httptest.NewRecorder()
+
+	require.NoError(t, m.ForwardResponseOption(t.Context(), w, &auth.CallbackResponse{ClientToken: "token-value"}))
+
+	cookies := w.Result().Cookies()
+	require.Len(t, cookies, 1)
+	assert.Equal(t, tokenCookieKey, cookies[0].Name)
+	assert.Equal(t, "token-value", cookies[0].Value)
+	assert.NotContains(t, w.Header().Get("Set-Cookie"), "Domain=")
 }
 
 func TestForwardPrefix(t *testing.T) {

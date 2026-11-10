@@ -196,6 +196,41 @@ func TestLoad(t *testing.T) {
 			},
 		},
 		{
+			name: "authentication session empty domain",
+			path: "./testdata/authentication/session_domain_empty.yml",
+			expected: func() *Config {
+				cfg := Default()
+				cfg.Authentication.Required = true
+				cfg.Authentication.Session = AuthenticationSessionConfig{
+					Storage: AuthenticationSessionStorageConfig{
+						Type: AuthenticationSessionStorageTypeMemory,
+						Cleanup: AuthenticationSessionStorageCleanupConfig{
+							GracePeriod: 30 * time.Minute,
+						},
+					},
+					TokenLifetime: 24 * time.Hour,
+					StateLifetime: 10 * time.Minute,
+					CSRF: AuthenticationSessionCSRFConfig{
+						Secure: true,
+					},
+				}
+				cfg.Authentication.Methods = AuthenticationMethodsConfig{
+					Token: AuthenticationMethod[AuthenticationMethodTokenConfig]{
+						Enabled: true,
+						Method: AuthenticationMethodTokenConfig{
+							Storage: AuthenticationMethodTokenStorage{
+								Type: AuthenticationMethodTokenStorageTypeStatic,
+							},
+						},
+					},
+					OIDC: AuthenticationMethod[AuthenticationMethodOIDCConfig]{
+						Enabled: true,
+					},
+				}
+				return cfg
+			},
+		},
+		{
 			name: "authentication session strip domain scheme/port",
 			path: "./testdata/authentication/session_domain_scheme_port.yml",
 			expected: func() *Config {

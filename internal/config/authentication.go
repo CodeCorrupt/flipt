@@ -118,23 +118,19 @@ func (c *AuthenticationConfig) SessionEnabled() bool {
 }
 
 func (c *AuthenticationConfig) validate() error {
-	// ensure that when a session compatible authentication method has been
-	// enabled that the session cookie domain has been configured with a non
-	// empty value.
 	if c.SessionEnabled() {
-		if c.Session.Domain == "" {
-			return errFieldRequired("authentication", "session_domain")
-		}
+		// an empty session domain sets host-only session cookies
+		if c.Session.Domain != "" {
+			host, err := getHostname(c.Session.Domain)
+			if err != nil {
+				return errFieldWrap("authentication", "session_domain", err)
+			}
 
-		host, err := getHostname(c.Session.Domain)
-		if err != nil {
-			return errFieldWrap("authentication", "session_domain", err)
+			// strip scheme and port from domain
+			// domain cookies are not allowed to have a scheme or port
+			// https://github.com/golang/go/issues/28297
+			c.Session.Domain = host
 		}
-
-		// strip scheme and port from domain
-		// domain cookies are not allowed to have a scheme or port
-		// https://github.com/golang/go/issues/28297
-		c.Session.Domain = host
 
 		if err := c.Session.Storage.validate(); err != nil {
 			return errFieldWrap("authentication", "session_storage", err)

@@ -1,0 +1,9 @@
+authentication:
+  required: true
+  session:
+    secure: false
+  methods:
+    token:
+      enabled: true
+    oidc:
+      enabled: true
